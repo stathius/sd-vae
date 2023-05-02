@@ -3,147 +3,122 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import figaspect
 import torch
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.figure import figaspect
+import wandb 
+import time 
+from pathlib import Path
 
-def plot_3body(phase_space, ax, ls):
-    d = 2
-    r1=phase_space[:,:d]
-    r2=phase_space[:,d:2*d]
-    r3=phase_space[:,2*d:3*d]
+def create_video(pl_module, batch):
+    batch = batch.to(pl_module.device)
+    batch_size, seq_len, c, h, w = batch.shape
+    input_seq_len = pl_module.hparams.test_input_seq_len
+    out_seq_len = seq_len - input_seq_len
 
-    ax.plot(r1[:,0],r1[:,1],color="tab:red", linestyle=ls)
-    ax.plot(r2[:,0],r2[:,1],color="tab:green", linestyle=ls)
-    ax.plot(r3[:,0],r3[:,1],color="darkblue", linestyle=ls)
+    sidx = np.random.randint(batch.shape[0])
+    prediction = pl_module.rollout(batch[sidx:(sidx+1),:input_seq_len], out_seq_len)
 
-    ms = 50
-    #Plot the initial positions
-    ax.scatter(r1[0,0],r1[0,1],color="tab:red",marker="s",s=ms)
-    ax.scatter(r2[0,0],r2[0,1],color="tab:green",marker="s",s=ms)
-    ax.scatter(r3[0,0],r3[0,1],color="darkblue",marker="s",s=ms)
+    t_in_max = pl_module.hparams.test_input_seq_len
+    t_in= [0, t_in_max//3-1, t_in_max//2-1, int(t_in_max//1.5)-1, t_in_max-1]  
+    t_out = (np.array(pl_module.test_lengths) - 1)+input_seq_len
 
-    #Plot the final positions
-    ax.scatter(r1[-1,0],r1[-1,1],color="tab:red",marker="o",s=ms)
-    ax.scatter(r2[-1,0],r2[-1,1],color="tab:green",marker="o",s=ms)
-    ax.scatter(r3[-1,0],r3[-1,1],color="darkblue",marker="o",s=ms)
+    nframes_in = len(t_in)
+    nframes_out = len(t_out)
 
-    ax.set_ylim([-5,5])
-    ax.set_xlim([-5,5])
+    all_images = torch.cat([batch[sidx:(sidx+1),:], 
+                            prediction, 
+                            torch.pow(batch[sidx:(sidx+1), :] - prediction, 2)]).squeeze().cpu()
+    images_in=all_images[:,t_in]
+    images_out=all_images[:,t_out]
 
-def log_prediction_charts(pl_module, batch, stage):
-    dataset = pl_module.hparams.dataset
+    ncols  = [nframes_in, nframes_out]
+    nrows = 3 # gt, pred, mse
+    w, h = figaspect(nrows/(nframes_in+nframes_out))
+    fig = plt.figure(figsize=(w,h), constrained_layout=False)
+    outer = gridspec.GridSpec(nrows=1, ncols=2, wspace=0.03, hspace=0.0, width_ratios=ncols)
 
-    if ('pixel_pendulum' in dataset):
-        rollout_size = np.max(pl_module.val_rec_loss_sizes) 
-        output, target = pl_module.rollout(batch, start=0, rollout_size=rollout_size)
-        output = torch.sigmoid(output).detach().cpu().numpy()
-        target = target.detach().cpu().numpy()
+    ylabels=['GT', 'MODEL', 'MSE']
 
-        s = 0
-        labels = batch['labels'][s].detach().numpy()
+    wspace=0.05
+    hspace=0.05
+    in_frames = gridspec.GridSpecFromSubplotSpec(nrows=nrows, ncols=ncols[0],
+                        subplot_spec=outer[0], wspace=wspace, hspace=hspace)
+    for i in range(nrows):
+        for j in range(ncols[0]):
+            ax = plt.Subplot(fig, in_frames[i,j])
+            ax.set(xticks=[], yticks=[])
+            fig.add_subplot(ax)
+            ax.imshow(images_in[i,j],cmap='gray',vmin=0, vmax=1)       
+            if j == 0:
+                ax.set_ylabel(ylabels[i])
+            if i==2:
+                if j==0:
+                    ax.set_xlabel(f't={t_in[j]+1}')
+                else:
+                    ax.set_xlabel(t_in[j]+1)
+            if i==0 and j==len(t_in)//2:
+                ax.set_title('Prediction with Inputs')
 
-        for frame in pl_module.val_rec_loss_sizes:
-            #Create figure
-            fig=plt.figure(figsize=(6,4))
-            ax=fig.add_subplot(131)
-            ax.set_yticks([])
-            ax.set_xticks([])
-            ax.set_aspect('equal')
-            plt.imshow(target[s][frame-1], cmap='gray')
-            plt.title('target')
-            
-            ax=fig.add_subplot(132)
-            ax.set_yticks([])
-            ax.set_xticks([])
-            ax.set_aspect('equal')
-            plt.imshow(output[s][frame-1], cmap='gray')
-            plt.title('output')
+    out_frames = gridspec.GridSpecFromSubplotSpec(nrows=nrows, ncols=ncols[1],
+                        subplot_spec=outer[1], wspace=wspace, hspace=hspace)
+    for i in range(nrows):
+        for j in range(ncols[1]):
+            ax = plt.Subplot(fig, out_frames[i,j])
+            ax.set(xticks=[], yticks=[])
+            fig.add_subplot(ax)
+            ax.imshow(images_out[i,j],cmap='gray',vmin=0, vmax=1)
+            if i==2:
+                ax.set_xlabel(t_out[j]+1)
+            if i==0 and j==len(t_out)//2:
+                ax.set_title('Video Prediction without Further Inputs')
+    return fig
 
-            ax=fig.add_subplot(133)
-            ax.set_yticks([])
-            ax.set_xticks([])
-            ax.set_aspect('equal')
-            plt.imshow(np.abs(target[s][frame-1] - output[s][frame-1]), cmap='gray')
-            plt.title('abs diff')
-            pl_module.log_image(f"visual_{stage}/timestep {frame}", fig)
-            plt.close()
-    elif ('pendulum' in dataset) or ('lv' in dataset):
-        output, target = pl_module.rollout(batch, start=0, rollout_size=500)
-        output = output.detach().cpu().numpy()
-        target = target.detach().cpu().numpy()
-        for s in [0]: # random sample from batch
-            w, h = figaspect(1/3.5)
-            fig, axs = plt.subplots(1, 3, figsize=(w/2.0,h/2.0))
-            labels = batch['labels'][s].detach().numpy()
-            labels_str = ' - '.join([f'{l:.2f}' for l in labels])
-            plt.suptitle(f"Params: {labels_str}")
-            for var in [0, 1]:
-                axs[var].plot(target[s][:,var], label=f'target {var}')
-                axs[var].plot(output[s][:,var], label=f'prediction {var}')
-                axs[var].plot(output[s][:,var]-target[s][:,var], label=f'error {var}')
-                axs[var].legend()
-            axs[2].plot(target[s][:,0], target[s][:,1], label='target')
-            axs[2].plot(output[s][:,0], output[s][:,1], label='prediction')
-            axs[2].legend()
-            pl_module.log_image(f"visual_{stage}/sample {s}", fig)
-            plt.close()       
-    elif ('3body' in dataset):
-        output, target = pl_module.rollout(batch, start=0, rollout_size=500)
-        output = output.detach().cpu().numpy()
-        target = target.detach().cpu().numpy()
+def log_video(pl_module, batch):
+    start = time.time()
+    fig = create_video(pl_module, batch)
+    pl_module.logger.experiment.log({'video_rollout': wandb.Image(fig)})
+    plt.close()
+    print(f'Saving Video. Creation time: {time.time()-start:.2f}')
 
-        for s in [0]:
-            labels = batch['labels'][s].detach().numpy()
-
-            #Create figure
-            fig=plt.figure(figsize=(5,5))
-            ax=fig.add_subplot(111)
-            ax.set_aspect('equal')
-
-            #Plot the orbits
-            plot_3body(target[s], ax, 'dotted')
-            plot_3body(output[s], ax, 'solid')
-
-            # Set the title
-            K2, m1, m2, m3 = labels
-            title = f'K2 {K2:.2f} - m1/m2/m3 {m1:.2f}/{m2:.2f}/{m3:.2f}'
-            
-            plt.title(title)
-            pl_module.log_image(f"visual_{stage}/sample {s}", fig)
-            plt.close()
-
-
-class BestValidationCallback(pl.callbacks.base.Callback):
-    # logs the best validation loss and other stuff
-    def __init__(self, monitor, use_wandb):
+class NewBestModelCallback(pl.callbacks.base.Callback):
+    # logs the best loss and makes 
+    def __init__(self):
         super().__init__()
-        self.monitor = monitor
-        self.best_val_loss = np.Inf
-        self.use_wandb = use_wandb
+        self.best_loss = np.Inf
 
+    def on_train_start(self, trainer, pl_module):
+        print('Grabbing batches for video creation')
+        self.batches = {}
+        self.batches['train'] = next(iter(pl_module.train_dataloader()))
+        test_dloaders = pl_module.test_dataloader()
+        self.batches['test'] = next(iter(test_dloaders[0]))
 
-    def on_validation_end(self, trainer, pl_module):
-        if trainer.sanity_checking or pl_module.hparams.fast_dev_run:
-            return
+    def on_train_epoch_end(self, trainer, pl_module):
         losses = trainer.logger_connector.callback_metrics
-        if (losses[self.monitor] < self.best_val_loss):
-            self.best_val_loss = losses[self.monitor]
-            if self.use_wandb:
-                for k, v in losses.items():
-                    if not 'grad' in k:
-                        trainer.logger.experiment.summary[f'best/{k}'] = v
-
-            for stage in ['train', 'val']:
-                batch = pl_module.batch_sample[stage]
-                log_prediction_charts(pl_module, batch, stage)
+        monitor = pl_module.hparams.monitor+'_epoch'
+        if (losses[monitor] < self.best_loss):
+            self.best_loss = losses[monitor]
+            for k, v in losses.items():
+                if not 'grad' in k:
+                    trainer.logger.experiment.summary[f'best/{k}'] = v
+        if ((pl_module.current_epoch+1) % 10)==0:
+	        log_video(pl_module, self.batches['test'])
 
 
-class TestEndCallback(pl.callbacks.base.Callback):
-    # logs the best validation loss and other stuff
-    def __init__(self, use_wandb):
-        super().__init__()
-        self.use_wandb = use_wandb
+class PeriodicCheckpoint(pl.callbacks.ModelCheckpoint):
+    def __init__(self, every: int):
+        super().__init__(period=-1)
+        self.every = every
 
-    def on_test_end(self, trainer, pl_module):
-        if self.use_wandb:
-            for stage, batch in pl_module.batch_sample.items():
-                if 'test' in stage:
-                    log_prediction_charts(pl_module, batch, stage)
+    def on_train_batch_end(
+        self, trainer: pl.Trainer, pl_module: pl.LightningModule, *args, **kwargs
+    ):
+        if (pl_module.current_epoch+1) % self.every == 0:
+            assert self.dirpath is not None
+            current = Path(self.dirpath) / f"latest-{pl_module.current_epoch}.ckpt"
+            # prev = (
+            #     Path(self.dirpath) / f"latest-{pl_module.current_epoch - self.every}.ckpt"
+            # )
+            trainer.save_checkpoint(current)
+            # prev.unlink(missing_ok=True)
