@@ -1,6 +1,6 @@
-# 
+# Overview
 
-This github repository contain code for the paper titles "Disentangled generative models for robust dynamical system prediction" that was presented in ICML 2023.
+This github repository contain code for the paper titled "Disentangled generative models for robust dynamical system prediction" that was presented at ICML 2023.
 
 In the `main` branch there is code to replicate the phase-space experimen. The branch `rssm` have the code for the video pendulum experiments. Both branches contain code to generate data, train and evaluate the models.
 
@@ -22,7 +22,7 @@ If you find this GitHub repository useful for your work, please consider citing 
 
 @article{fotiadis2022disentangled ,
   title={Disentangled Generative Models for Robust Prediction of System Dynamics},
-  author={Fotiadis, Stathi and Valencia, Mario Lino and Hu, Shunlong and Cantwell, Chris D and Bharatch, Anil Anthony},
+  author={Fotiadis, Stathi and Valencia, Mario Lino and Hu, Shunlong and Garasto, Stef and Cantwell, Chris D and Bharatch, Anil Anthony},
   booktitle={International Conference on Machine Learning},
   year={2023},
   organization={PMLR}
